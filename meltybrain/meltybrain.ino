@@ -101,6 +101,11 @@ void loop() {
   strip.fill(black, 0, 25);
   
   if (CRSF.isLinkUp()) {
+    if (channelToBool(7)) {
+      strip.setBrightness(150);
+    } else {
+      strip.setBrightness(5);
+    }
     scaledThrottle = channelToPercent(1) * 0.6; // Scale throttle to 60% max for now
     if (scaledThrottle < .05 ) { // Tank drive if throttle is low
       strip.fill(purple, 0, 9);
@@ -119,26 +124,37 @@ void loop() {
       } else if (headerOffset < -360) {
         headerOffset = 0;
       }
-      Serial.println(headerOffset);
-      if (currentAngle > 340 + headerOffset || currentAngle < 20 - headerOffset) {
-        if (UART.data.inpVoltage < (12 * 3.80)) {
-          strip.fill(red, 0, 25);
-        } else {
-          strip.fill(white, 0, 25);
-        }
-      }
-      float rY = channelToPercent(3, true) * .20; // Right stick, Y axis
+
       int offsetAngle = currentAngle + headerOffset;
       if (offsetAngle > 360) {
         offsetAngle -= 360;
       } else if (offsetAngle < 0) {
         offsetAngle += 360;
       }
-      float rads = (offsetAngle - 90) * (M_PI / 180.0);
-      UART.setDuty(scaledThrottle + (abs(sin(rads)) * rY));
-      UART.setDuty((scaledThrottle * -1) + (abs(sin(rads)) * rY), 2);
-      // float rX = channelToPercent(4, true); // Right stick, X axis
 
+      // Serial.print(UART.data.inpVoltage/12.0);
+      // Serial.print(", ");
+      // Serial.println(UART.data.tempMotor);
+      if (offsetAngle > 340 || offsetAngle < 20 ) {
+        if (UART.data.inpVoltage < (12 * 3.50)) {
+          strip.fill(red, 0, 25);
+        } else {
+          strip.fill(white, 0, 25);
+        }
+      }
+      float rY = channelToPercent(3, true); // Right stick, Y axis
+      float rX = channelToPercent(4, true); // Right stick, X axis
+      float rAngle = atan2(rY, rX) * (180 / M_PI);
+      float rMagnitude = sqrt(pow(rX, 2) + pow(rY, 2)) * .2; // Scale to 20% of stick value
+      offsetAngle = currentAngle + rAngle - 90;
+      if (offsetAngle > 360) {
+        offsetAngle -= 360;
+      } else if (offsetAngle < 0) {
+        offsetAngle += 360;
+      }
+      float rads = offsetAngle * (M_PI / 180.0);
+      UART.setDuty(scaledThrottle + (cos(rads)) * rMagnitude);
+      UART.setDuty((scaledThrottle * -1) + (cos(rads) * rMagnitude), 2);
     }
   } else { // ELRS link is down
     strip.fill(yellow, 0, 25);
