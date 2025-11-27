@@ -26,11 +26,14 @@ const int MAX_BRIGHTNESS = 200;
 
 const float MAX_RADS = 2 * M_PI;
 
+const long animInterval = 1000;
+
 float wheelRPML = 0, wheelRPMR = 0, botRPMFromMotor = 0, botRPMFromXl = 0, wheelVelocityMpS = 0;
 const float wheelRadiusMm = 123.825;
 unsigned long startMicros = 0, rpmMicros = 0, durationMicros = 0;
 float headerOffset = 0;
 int16_t x, y, z;
+float xAvg = 0, yAvg = 0, zAvg = 0;
 float scaledThrottle = 0;
 float avgWheelRPM = 0;
 float distanceFromCenterOffset = 0;
@@ -93,6 +96,12 @@ void loop() {
   // loopCounter ++;
 
   CRSF.update(); // fast
+  // UART.getVescValues(); // ~3.75ms
+
+  // Do this regardless of melty mode for other telemetry, and to prevent locking the connecting in a bad state due to timeout
+  // Can fix async later to re-trigger transmit if it's been longer than timeout
+  UART.getVescValuesAsync(); // fast
+
   strip.fill(black, 0, 25);
   
   if (CRSF.isLinkUp()) {
@@ -103,9 +112,7 @@ void loop() {
     }
     scaledThrottle = channelToPercent(1) * 0.6; // Scale throttle to 60% max for now
     if (scaledThrottle < .05 ) { // Tank drive if throttle is low
-      strip.fill(purple, 0, 9);
-      strip.fill(green, 9, 16);
-      strip.fill(purple, 16, 25);
+      ledTankDriveAnim();
       float rY = channelToPercent(3, true) * 0.25; // Right stick, Y axis, scale to 25%
       float rX = channelToPercent(4, true) * 0.1; // Right stick, X axis, scale to 10%
       UART.setDuty(rY + rX);
@@ -113,25 +120,28 @@ void loop() {
     }
     else { // do melty things
       durationMicros = micros() - startMicros;
-      xl.readAxes(x, y, z); // ~2.8ms
-      float rY = channelToPercent(3, true); // Right stick, Y axis
-      float rX = channelToPercent(4, true); // Right stick, X axis
+      float rY = -1 * channelToPercent(3, true); // Right stick, Y axis
+      float rX = -1 * channelToPercent(4, true); // Right stick, X axis
       float rAngle = atan2(rY, rX);
       float rMagnitude = sqrt(rX*rX + rY*rY); // Scale to 20% of stick value
-      // UART.getVescValues(); // ~3.75ms
-      UART.getVescValuesAsync(); // fast
-      distanceFromCenterOffset = channelToPercent(6, true) * 2;
-      x = xl.convertToG(XL_MAX, x);
-      y = xl.convertToG(XL_MAX, y);
-      z = xl.convertToG(XL_MAX, z);
-      botRPMFromXl = rpmFromXlGs((sqrt(z*z + y*y)), distanceFromCenterOffset);
+
+      distanceFromCenterOffset = channelToPercent(6, true);
+
       if (channelToBool(5) == true) { // Transmitter switch to decide between motor eRPM calc and accelerometer calc. Eventually this should be sensor fusion instead?
+        xl.readAxes(x, y, z); // ~2.8ms
+        // Get absolute values to ignore orientation and subtract measured offset
+        // Measured avg offsets - x:0.36,y:0.53,z:0.38
+        // float xG = fabs(xl.convertToG(XL_MAX, x)) - 0.36;
+        float yG = fabs(xl.convertToG(XL_MAX, y)) - 0.53;
+        float zG = fabs(xl.convertToG(XL_MAX, z)) - 0.38;
+        botRPMFromXl = rpmFromXlGs((sqrt(zG*zG + yG*yG)), distanceFromCenterOffset * 2);
         rpmMicros = (60000.0 * 1000) / botRPMFromXl;
       } else {
         if (!rMagnitude) { // if using motor eRPM, only update when not translating
+          // wheelRPML = 4444; // Hardcode 80% throttle RPM for debugging without motors on
           wheelRPML = (fabs(UART.data.rpm)/14.0) / 1.6; // eRPM, divide by motor polls and belt reduction
           avgWheelRPM = wheelRPML;
-          wheelVelocityMpS = (avgWheelRPM * (MAX_RADS * (wheelRadiusMm / 1000.0))) / 60;
+          wheelVelocityMpS = (avgWheelRPM * (MAX_RADS * ((wheelRadiusMm + (distanceFromCenterOffset * 1)) / 1000.0))) / 60;
           botRPMFromMotor = (wheelVelocityMpS / (M_PI * ((138.0 / 1000) * 2))) * 60;
           rpmMicros = (60000.0 * 1000) / botRPMFromMotor;
         }
@@ -143,14 +153,19 @@ void loop() {
       }
 
       float currentAngle = microsToRadians(durationMicros, rpmMicros);
-      float lX = channelToPercent(2);
+      float lX = channelToPercent(2, false);
       if (fabs(lX) > .2) { // Add deadband
-        headerOffset += lX * .02; // Scale by how fast you want to adjust the header
+        headerOffset -= lX * .02; // Scale by how fast you want to adjust the header
         if (headerOffset > MAX_RADS) {
           headerOffset = 0;
         } else if (headerOffset < 0) {
           headerOffset = MAX_RADS;
         }
+      }
+
+      float offsetAngle = currentAngle + headerOffset;
+      if (offsetAngle > MAX_RADS) {
+        offsetAngle -= MAX_RADS;
       }
 
       // Serial.print("headerOffset:");
@@ -160,14 +175,14 @@ void loop() {
       // Serial.print(currentAngle * (180/M_PI));
       // Serial.print(",");
       // Serial.print("OffsetAngle:");
-      // Serial.println(offsetAngle * (180/M_PI));
+      // Serial.print(offsetAngle * (180/M_PI));
+      // Serial.print(",");
+      // Serial.print((MAX_RADS - MAX_RADS/360*5) * (180/M_PI));
+      // Serial.print(",");
+      // Serial.println((MAX_RADS/360*5) * (180/M_PI));
 
-      float offsetAngle = currentAngle + headerOffset;
-      if (offsetAngle > MAX_RADS) {
-        offsetAngle -= MAX_RADS;
-      }
 
-      if (MAX_RADS - MAX_RADS/360*5 <= offsetAngle <= MAX_RADS/360*5) { // Flash header at +- 5 degrees of 0
+      if (offsetAngle >= MAX_RADS - MAX_RADS/360*5 || offsetAngle <= MAX_RADS/360*5) { // Flash header at +- 5 degrees of 0
         if (UART.data.inpVoltage < (12 * 3.50)) {
           strip.fill(red, 0, 25);
         } else {
@@ -183,8 +198,8 @@ void loop() {
       }
 
 
-      float leftMotorDuty = scaledThrottle + (cos(translationAngle) * rMagnitude*0.1);
-      float rightMotorDuty = (-1 * scaledThrottle) + (-cos(translationAngle) * rMagnitude*0.1);
+      float leftMotorDuty = scaledThrottle + (sin(translationAngle) * rMagnitude*0.1);
+      float rightMotorDuty = scaledThrottle + (-sin(translationAngle) * rMagnitude*0.1);
       // Serial.print("LeftMotor:");
       // Serial.print(leftMotorDuty);
       // Serial.print(",");
@@ -192,7 +207,7 @@ void loop() {
       // Serial.println(rightMotorDuty);
 
       UART.setDuty(leftMotorDuty);
-      UART.setDuty(rightMotorDuty, 2);
+      UART.setDuty(-rightMotorDuty, 2);
     }
   } else { // ELRS link is down
     strip.fill(yellow, 0, 25);
@@ -206,6 +221,13 @@ void loop() {
   //   loopCounter = 0;
   // }
 }
+
+void ledTankDriveAnim() {
+  strip.fill(purple, 0, 9);
+  strip.fill(green, 9, 16);
+  strip.fill(purple, 16, 25);
+}
+  
 
 bool initStatus () {
   bool xlStatus=false, elrsStatus=false, vescStatus=false;
@@ -255,9 +277,9 @@ bool initStatus () {
 
 float channelToPercent(int channel, bool reversible) {
   if (reversible == true) {
-    return map(CRSF.getChannel(channel), 1000, 2000, -100, 100) / 100.0;
+    return fmap(CRSF.getChannel(channel), 1000, 2000, -100, 100) / 100.0;
   } else {
-    return map(CRSF.getChannel(channel), 1500, 2000, 0, 100) / 100.0;
+    return fmap(CRSF.getChannel(channel), 1500, 2000, 0, 100) / 100.0;
   }
 }
 
@@ -265,26 +287,17 @@ bool channelToBool(int channel) {
   return map(CRSF.getChannel(channel), 1000, 2000, 0, 1);
 }
 
-float rpmFromXlGs(int g, float distanceFromCenterOffset) {
+float rpmFromXlGs(float g, float distanceFromCenterOffset) {
   float rpm;
-  //use of absolute makes it so we don't need to worry about accel orientation
   //calculate RPM from g's - derived from "G = 0.00001118 * r * RPM^2"
-  rpm = fabs(g) * 89445.0f;
+  rpm = g * 89445.0f;
   rpm = rpm / ((67.385 + distanceFromCenterOffset) / 10) ; // 67.385mm from CoR  (OLD: 14.4mm Xl distance from CoR)
   rpm = sqrt(rpm);
   return rpm;
 }
 
-float microsToDegrees(long durationMicros, long rpmMicros) {
-  return map(durationMicros, 0, rpmMicros, 0.0, 360.0);
-}
-
-float microsToRadians(long durationMicros, long rpmMicros) {
-  return map(durationMicros, 0, rpmMicros, 0.0, MAX_RADS);
-}
-
-float degreesToPercent(int degrees) {
-  return map(degrees, 0, 360, 0.0, 100.0);
+float microsToRadians(unsigned long durationMicros, unsigned long rpmMicros) {
+  return fmap(durationMicros, 0, rpmMicros, 0.0, MAX_RADS);
 }
 
 float fmap(float x, float in_min, float in_max, float out_min, float out_max)
