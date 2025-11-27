@@ -120,8 +120,8 @@ void loop() {
     }
     else { // do melty things
       durationMicros = micros() - startMicros;
-      float rY = -1 * channelToPercent(3, true); // Right stick, Y axis
-      float rX = -1 * channelToPercent(4, true); // Right stick, X axis
+      float rY = channelToPercent(3, true); // Right stick, Y axis
+      float rX = channelToPercent(4, true); // Right stick, X axis
       float rAngle = atan2(rY, rX);
       float rMagnitude = sqrt(rX*rX + rY*rY); // Scale to 20% of stick value
 
@@ -198,8 +198,8 @@ void loop() {
       }
 
 
-      float leftMotorDuty = scaledThrottle + (sin(translationAngle) * rMagnitude*0.1);
-      float rightMotorDuty = scaledThrottle + (-sin(translationAngle) * rMagnitude*0.1);
+      float leftMotorDuty = scaledThrottle + (cos(translationAngle) * rMagnitude*0.1);
+      float rightMotorDuty = scaledThrottle + (-cos(translationAngle) * rMagnitude*0.1);
       // Serial.print("LeftMotor:");
       // Serial.print(leftMotorDuty);
       // Serial.print(",");
