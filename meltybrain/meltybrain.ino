@@ -30,7 +30,7 @@ const long animInterval = 1000;
 
 float wheelRPML = 0, wheelRPMR = 0, botRPMFromMotor = 0, botRPMFromXl = 0, wheelVelocityMpS = 0;
 const float wheelRadiusMm = 123.825;
-unsigned long startMicros = 0, rpmMicros = 0, durationMicros = 0;
+unsigned long startMicros = 0, rpmMicros = 0, durationMicros = 0, lastAnim = 0;
 float headerOffset = 0;
 int16_t x, y, z;
 float xAvg = 0, yAvg = 0, zAvg = 0;
@@ -40,6 +40,7 @@ float distanceFromCenterOffset = 0;
 
 unsigned long timerMicros = 0;
 int loopCounter = 0;
+int animIndex = 0;
 
 float channelToPercent(int channel, bool reversible=false);
 
@@ -56,6 +57,7 @@ void setup() {
                           //  Also zeroes out all accelerometer
                           //  registers that are user writable.
   xl.setFullScale(xl.HIGH_RANGE); // 400G
+  // xl.setLogPort(&Serial);
 
   Serial.begin(9600); // Teensy always uses USB Serial speed, this speed is ignored
   Serial.println("Setup started");
@@ -128,17 +130,18 @@ void loop() {
       distanceFromCenterOffset = channelToPercent(6, true);
 
       if (channelToBool(5) == true) { // Transmitter switch to decide between motor eRPM calc and accelerometer calc. Eventually this should be sensor fusion instead?
-        xl.readAxes(x, y, z); // ~2.8ms
-        // Get absolute values to ignore orientation and subtract measured offset
-        // Measured avg offsets - x:0.36,y:0.53,z:0.38
-        // float xG = fabs(xl.convertToG(XL_MAX, x)) - 0.36;
-        float yG = fabs(xl.convertToG(XL_MAX, y)) - 0.53;
-        float zG = fabs(xl.convertToG(XL_MAX, z)) - 0.38;
-        botRPMFromXl = rpmFromXlGs((sqrt(zG*zG + yG*yG)), distanceFromCenterOffset * 2);
-        rpmMicros = (60000.0 * 1000) / botRPMFromXl;
+        // xl.readAxes(x, y, z); // ~2.5ms
+        if (xl.readAxesAsync(x, y, z)) { // ~400us
+        //   // Get absolute values to ignore orientation and subtract measured offset
+        //   // Measured avg offsets - x:0.36,y:0.53,z:0.38
+          // float xG = fabs(xl.convertToG(XL_MAX, x)) - 0.36; // x is up/down
+          float yG = fabs(xl.convertToG(XL_MAX, y)) - 0.53;
+          float zG = fabs(xl.convertToG(XL_MAX, z)) - 0.38;
+          botRPMFromXl = rpmFromXlGs((sqrt(zG*zG + yG*yG)), distanceFromCenterOffset * 2);
+          rpmMicros = (60000.0 * 1000) / botRPMFromXl;
+        }
       } else {
         if (!rMagnitude) { // if using motor eRPM, only update when not translating
-          // wheelRPML = 4444; // Hardcode 80% throttle RPM for debugging without motors on
           wheelRPML = (fabs(UART.data.rpm)/14.0) / 1.6; // eRPM, divide by motor polls and belt reduction
           avgWheelRPM = wheelRPML;
           wheelVelocityMpS = (avgWheelRPM * (MAX_RADS * ((wheelRadiusMm + (distanceFromCenterOffset * 1)) / 1000.0))) / 60;
@@ -216,13 +219,23 @@ void loop() {
   }
   strip.show();
 
-  // if (loopCounter >= 200) {
+  // if (loopCounter >= 500) {
   //   Serial.println(((micros() - timerMicros)/ loopCounter)/1000.0);
   //   loopCounter = 0;
   // }
 }
 
 void ledTankDriveAnim() {
+  // unsigned long now = millis()
+  // int start = ;
+  // int end = 9;
+  // strip.fill(purple, 0, 9);
+  // strip.fill(green, 9, 16);
+  // strip.fill(purple, 16, 25);
+  // if (now - lastAnim > 1000) {
+  //   animIndex++;
+  //   lastAnim = now;
+  // }
   strip.fill(purple, 0, 9);
   strip.fill(green, 9, 16);
   strip.fill(purple, 16, 25);
