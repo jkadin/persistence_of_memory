@@ -4,6 +4,8 @@
 #include <Wire.h>
 #include <VescUart.h>
 #include <AlfredoCRSF.h>
+#include <EEPROM.h>
+#include <FastCRC.h>
 
 #define NUMPIXELS 25
 
@@ -12,6 +14,8 @@ VescUart UART;
 AlfredoCRSF CRSF;
 
 Adafruit_DotStar strip(NUMPIXELS, DOTSTAR_BGR);
+
+const unsigned long EEPROM_MAGIC_NUMBER = 0xDECAFBAD;
 
 const uint32_t red = 0xFF0000;
 const uint32_t green = 0x00FF00;
@@ -22,7 +26,7 @@ const uint32_t purple = 0x800080;
 const uint32_t white = 0xFFFFFF;
 
 const int XL_MAX = 400;
-const int MAX_BRIGHTNESS = 200;
+const int MAX_BRIGHTNESS = 250;
 
 const float MAX_RADS = 2 * M_PI;
 
@@ -42,9 +46,52 @@ unsigned long timerMicros = 0;
 int loopCounter = 0;
 int animIndex = 0;
 
+int numConfigs = 0;
+struct accelConfig {
+      float g;
+      float rpm;
+    };
+
+accelConfig accelConfigs[50];
+
 float channelToPercent(int channel, bool reversible=false);
 
 void setup() {
+  Serial.begin(9600); // Teensy always uses USB Serial speed, this speed is ignored
+  Serial.println("Setup started");
+
+  // Check EEPROM
+  unsigned long magicNumCheck;
+  FastCRC8 CRC8;
+  uint8_t crc, eepromCrc;
+  int eepromIndex = 0;
+  accelConfig eepromConfigs[50];
+  crc = CRC8.smbus((uint8_t*)&accelConfigs, sizeof(accelConfigs));
+
+  EEPROM.get(eepromIndex, magicNumCheck);
+  if (magicNumCheck != EEPROM_MAGIC_NUMBER) {
+    EEPROM.put(eepromIndex, EEPROM_MAGIC_NUMBER);
+    eepromIndex += sizeof(EEPROM_MAGIC_NUMBER);
+    EEPROM.put(eepromIndex, 0);
+    eepromIndex += sizeof(0);
+    EEPROM.put(eepromIndex, accelConfigs);
+    eepromIndex += sizeof(accelConfigs);
+    EEPROM.put(eepromIndex, crc);
+  } else {
+    Serial.println("Found correct magic number");
+    eepromIndex += sizeof(EEPROM_MAGIC_NUMBER);
+    EEPROM.get(eepromIndex, numConfigs);
+    eepromIndex += sizeof(numConfigs);
+    EEPROM.get(eepromIndex, eepromConfigs);
+    eepromIndex += sizeof(eepromConfigs);
+    EEPROM.get(eepromIndex, eepromCrc);
+    eepromCrc = CRC8.smbus((uint8_t*)&eepromConfigs, sizeof(eepromConfigs));
+    if (eepromCrc == crc) {
+      memcpy(accelConfigs, eepromConfigs, sizeof(eepromConfigs));
+    } else {
+    }
+  }
+
   strip.begin(); // Initialize pins for output
   strip.setBrightness(5);
   strip.show();  // Turn all LEDs off ASAP
@@ -58,9 +105,6 @@ void setup() {
                           //  registers that are user writable.
   xl.setFullScale(xl.HIGH_RANGE); // 400G
   // xl.setLogPort(&Serial);
-
-  Serial.begin(9600); // Teensy always uses USB Serial speed, this speed is ignored
-  Serial.println("Setup started");
 
   Serial1.begin(230400); // TX1/RX1 - UART to VESC
   Serial2.begin(420000); //TX2/RX2 - CRSF to ELRS Beta FPV Lite
@@ -102,7 +146,7 @@ void loop() {
 
   // Do this regardless of melty mode for other telemetry, and to prevent locking the connecting in a bad state due to timeout
   // Can fix async later to re-trigger transmit if it's been longer than timeout
-  UART.getVescValuesAsync(); // fast
+  UART.getVescValuesAsync();
 
   strip.fill(black, 0, 25);
   
@@ -125,13 +169,14 @@ void loop() {
       float rY = channelToPercent(3, true); // Right stick, Y axis
       float rX = channelToPercent(4, true); // Right stick, X axis
       float rAngle = atan2(rY, rX);
-      float rMagnitude = sqrt(rX*rX + rY*rY); // Scale to 20% of stick value
+      float rMagnitude = sqrt(rX*rX + rY*rY);
 
       distanceFromCenterOffset = channelToPercent(6, true);
 
       if (channelToBool(5) == true) { // Transmitter switch to decide between motor eRPM calc and accelerometer calc. Eventually this should be sensor fusion instead?
-        // xl.readAxes(x, y, z); // ~2.5ms
-        if (xl.readAxesAsync(x, y, z)) { // ~400us
+        // if (true) {
+          // xl.readAxes(x, y, z); // ~2.5ms
+        if (xl.readAxesAsync(x, y, z)) {
         //   // Get absolute values to ignore orientation and subtract measured offset
         //   // Measured avg offsets - x:0.36,y:0.53,z:0.38
           // float xG = fabs(xl.convertToG(XL_MAX, x)) - 0.36; // x is up/down
@@ -201,8 +246,8 @@ void loop() {
       }
 
 
-      float leftMotorDuty = scaledThrottle + (cos(translationAngle) * rMagnitude*0.1);
-      float rightMotorDuty = scaledThrottle + (-cos(translationAngle) * rMagnitude*0.1);
+      float leftMotorDuty = scaledThrottle + (cos(translationAngle) * rMagnitude * 0.2);
+      float rightMotorDuty = scaledThrottle + (-cos(translationAngle) * rMagnitude * 0.2);
       // Serial.print("LeftMotor:");
       // Serial.print(leftMotorDuty);
       // Serial.print(",");
@@ -219,8 +264,8 @@ void loop() {
   }
   strip.show();
 
-  // if (loopCounter >= 500) {
-  //   Serial.println(((micros() - timerMicros)/ loopCounter)/1000.0);
+  // if (loopCounter >= 1000) {
+  //   Serial.println(((micros() - timerMicros)/ loopCounter));
   //   loopCounter = 0;
   // }
 }
